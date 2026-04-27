@@ -557,7 +557,9 @@
           visitorData.geo.city = city || '--';
           visitorData.address_detail = buildAddressDetailFromReverse(data, addr, country, region, city);
           visitorData.geoSource = '设备 GPS + 逆地理编码';
-          visitorData.geoResolveStatus = visitorData.address_detail ? 'GPS 街道级反查成功' : 'GPS 城市反查成功';
+          visitorData.geoResolveStatus = /号/.test(visitorData.address_detail)
+            ? 'GPS 门牌级反查成功'
+            : (visitorData.address_detail ? 'GPS 街道级反查成功' : 'GPS 城市反查成功');
           return true;
         }
       } catch (e) {
@@ -568,6 +570,7 @@
   }
 
   function buildAddressDetailFromReverse(data, addr, country, region, city) {
+    const amapFormatted = localizeGeoText(data.regeocode?.formatted_address || '');
     const district = localizeGeoText(
       addr.city_district ||
       addr.district ||
@@ -597,6 +600,7 @@
       addr.house_number ||
       addr.house ||
       addr.building ||
+      extractHouseNumberFromText(amapFormatted) ||
       data.house_number ||
       ''
     );
@@ -614,7 +618,7 @@
     const core = dedupeAddressParts([country, region, orderedCity, orderedDistrict]
       .map((x) => localizeGeoText(x))
       .filter((x) => x && x !== '--'));
-    const roadPart = [street, streetNo].filter(Boolean).join('');
+    const roadPart = combineStreetAndNumber(street, streetNo);
     const landmark = localizeGeoText(addr.amenity || addr.attraction || addr.building || '');
     const tailCandidates = [township, roadPart, landmark, poi]
       .map((x) => sanitizeAddressFragment(x))
@@ -629,7 +633,7 @@
     }
 
     if (data.regeocode?.formatted_address && typeof data.regeocode.formatted_address === 'string') {
-      return localizeGeoText(data.regeocode.formatted_address.trim());
+      return amapFormatted.trim();
     }
     if (data.display_name && typeof data.display_name === 'string') {
       return localizeGeoText(data.display_name.trim());
@@ -717,6 +721,22 @@
     // 过滤逆地理接口偶发混入的百科描述类文本（非地址）
     if (/(地球上|面积最大|面積最大|人口最多|大洲|continent|Wikipedia|百科)/i.test(s)) return '';
     return s;
+  }
+
+  function combineStreetAndNumber(street, number) {
+    const s = localizeGeoText(street || '').trim();
+    const n = localizeGeoText(number || '').trim();
+    if (!s) return n;
+    if (!n) return s;
+    if (s.includes(n)) return s;
+    return `${s}${n}`;
+  }
+
+  function extractHouseNumberFromText(text) {
+    const s = localizeGeoText(text || '').trim();
+    if (!s) return '';
+    const match = s.match(/([0-9一二三四五六七八九十百千万]+号(?:[0-9A-Za-z甲乙丙丁\-#栋座单元室]*))/);
+    return match ? match[1] : '';
   }
 
   function buildAddressDetailFromIP(geo) {
