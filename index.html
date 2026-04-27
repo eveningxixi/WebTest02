@@ -2,173 +2,183 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>高精度定位引擎</title>
+<title>融合定位系统（进阶版）</title>
 
-<script src="https://webapi.amap.com/maps?v=2.0&key=4a37526179c8b959ee1b93a79ddc2e00"></script>
+<script src="https://webapi.amap.com/maps?v=2.0&key=你的JS_KEY"></script>
 
 <style>
-body { background:#0b1120;color:#e2e8f0;font-family:sans-serif;padding:20px;}
-.box{max-width:900px;margin:auto;}
-#map{height:320px;margin-top:15px;border-radius:10px;}
-.log{font-size:12px;color:#94a3b8;margin-top:10px;height:120px;overflow:auto;}
+body {background:#0b1120;color:#e2e8f0;font-family:sans-serif;padding:20px;}
+#map{height:320px;margin-top:10px;border-radius:10px;}
+.log{font-size:12px;height:120px;overflow:auto;color:#94a3b8;}
 .good{color:#34d399;}
 .bad{color:#f87171;}
 </style>
 </head>
 
 <body>
-<div class="box">
-<h2>高精度定位（收敛模式）</h2>
+
+<h2>融合定位系统（卡尔曼滤波）</h2>
 <div id="status">初始化中...</div>
 <div id="info"></div>
 <div id="map"></div>
 <div class="log" id="log"></div>
-</div>
 
 <script>
-const AMAP_KEY = '36a759d46f77237403291b98bed755f6';
+const AMAP_KEY = '你的Web服务Key';
 
-let best = null;
-let samples = [];
-let watchId = null;
-let map, marker;
+// =====================
+// 🧠 卡尔曼滤波
+// =====================
+class KalmanFilter {
+  constructor(R=0.00001, Q=3){
+    this.R = R;
+    this.Q = Q;
+    this.A = 1;
+    this.C = 1;
+    this.cov = NaN;
+    this.x = NaN;
+  }
+  filter(z){
+    if(isNaN(this.x)){
+      this.x = z;
+      this.cov = 1;
+    }else{
+      const predX = this.A * this.x;
+      const predCov = this.A * this.cov * this.A + this.R;
 
+      const K = predCov * this.C / (this.C * predCov * this.C + this.Q);
+      this.x = predX + K * (z - this.C * predX);
+      this.cov = predCov - K * this.C * predCov;
+    }
+    return this.x;
+  }
+}
+
+const kLat = new KalmanFilter();
+const kLon = new KalmanFilter();
+
+let bestAcc = Infinity;
+let map, marker, polyline;
+let path = [];
+let watchId;
+
+// =====================
 function log(msg, good=false){
   const el = document.getElementById('log');
   el.innerHTML += `<div class="${good?'good':'bad'}">${msg}</div>`;
   el.scrollTop = el.scrollHeight;
 }
 
-// ======================
-// 🚀 启动高精度定位
-// ======================
-function startLocate(){
-  if(!navigator.geolocation){
-    alert('浏览器不支持定位');
-    return;
-  }
-
-  document.getElementById('status').innerText = '定位中（收敛中...）';
-
-  watchId = navigator.geolocation.watchPosition(onSuccess, onError,{
+// =====================
+// 🚀 定位
+// =====================
+function start(){
+  watchId = navigator.geolocation.watchPosition(onPos,onErr,{
     enableHighAccuracy:true,
     timeout:15000,
     maximumAge:0
   });
 
-  // 10秒自动停止
-  setTimeout(stopLocate,10000);
+  setTimeout(stop,12000);
 }
 
-function stopLocate(){
-  if(watchId){
-    navigator.geolocation.clearWatch(watchId);
-    log('定位结束（已收敛）',true);
-    document.getElementById('status').innerText = '定位完成';
-  }
-
-  if(best){
-    reverseGeocode(best.coords.latitude,best.coords.longitude);
-  }
+function stop(){
+  navigator.geolocation.clearWatch(watchId);
+  document.getElementById('status').innerText='定位完成';
 }
 
-// ======================
-// 📍 定位成功
-// ======================
-function onSuccess(pos){
-  const acc = pos.coords.accuracy;
-  log(`采样: 精度 ${Math.round(acc)}m`);
+// =====================
+function onPos(pos){
+  let {latitude,longitude,accuracy} = pos.coords;
 
   // 丢弃垃圾点
-  if(acc > 800){
-    log('丢弃（精度太差）');
+  if(accuracy > 800){
+    log('丢弃差点');
     return;
   }
 
-  samples.push(pos);
+  // 卡尔曼滤波
+  latitude = kLat.filter(latitude);
+  longitude = kLon.filter(longitude);
 
-  if(!best || acc < best.coords.accuracy){
-    best = pos;
-    log(`✔ 更新最优: ${Math.round(acc)}m`,true);
-    render(best);
-  }
-
-  // 达到理想精度直接停止
-  if(acc < 50){
-    stopLocate();
-  }
-}
-
-// ======================
-function onError(err){
-  log('定位失败: '+err.message);
-}
-
-// ======================
-// 🧠 逆地理 + 缓存
-// ======================
-async function reverseGeocode(lat,lon){
-  const key = `${lat.toFixed(5)}_${lon.toFixed(5)}`;
-  const cache = localStorage.getItem(key);
-
-  if(cache){
-    applyAddress(JSON.parse(cache));
-    return;
-  }
-
-  try{
-    const url = `https://restapi.amap.com/v3/geocode/regeo?location=${lon},${lat}&key=${AMAP_KEY}&radius=3000&extensions=all`;
-    const res = await fetch(url);
-    const data = await res.json();
-
-    if(data.status==='1'){
-      localStorage.setItem(key,JSON.stringify(data));
-      applyAddress(data);
+  // 跳点检测（>300m直接丢）
+  if(path.length){
+    const last = path[path.length-1];
+    const dist = getDistance(last.lat,last.lon,latitude,longitude);
+    if(dist > 300){
+      log('丢弃跳点');
+      return;
     }
-  }catch(e){
-    log('逆地理失败');
+  }
+
+  path.push({lat:latitude,lon:longitude});
+
+  if(accuracy < bestAcc){
+    bestAcc = accuracy;
+    log(`✔精度提升 ${Math.round(accuracy)}m`,true);
+  }
+
+  render(latitude,longitude,accuracy);
+
+  if(accuracy < 30){
+    stop();
   }
 }
 
-function applyAddress(data){
-  const addr = data.regeocode.formatted_address;
-  document.getElementById('info').innerHTML += `<div>地址：${addr}</div>`;
+// =====================
+function getDistance(lat1,lon1,lat2,lon2){
+  const R=6371e3;
+  const φ1=lat1*Math.PI/180;
+  const φ2=lat2*Math.PI/180;
+  const Δφ=(lat2-lat1)*Math.PI/180;
+  const Δλ=(lon2-lon1)*Math.PI/180;
+
+  const a=Math.sin(Δφ/2)**2+
+  Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
 }
 
-// ======================
-// 🗺️ 地图
-// ======================
-function render(pos){
-  const lat = pos.coords.latitude;
-  const lon = pos.coords.longitude;
+// =====================
+function onErr(e){
+  log('定位失败');
+}
 
-  document.getElementById('info').innerHTML = `
-    <div>纬度：${lat}</div>
-    <div>经度：${lon}</div>
-    <div>精度：${Math.round(pos.coords.accuracy)} 米</div>
+// =====================
+// 🗺️ 渲染
+// =====================
+function render(lat,lon,acc){
+  document.getElementById('info').innerHTML=`
+    纬度:${lat.toFixed(6)}<br>
+    经度:${lon.toFixed(6)}<br>
+    精度:${Math.round(acc)}m
   `;
 
   if(!map){
-    map = new AMap.Map('map',{
-      zoom:16,
-      center:[lon,lat]
-    });
+    map = new AMap.Map('map',{zoom:17,center:[lon,lat]});
   }
 
   if(!marker){
-    marker = new AMap.Marker({
-      position:[lon,lat],
-      map:map
-    });
+    marker = new AMap.Marker({position:[lon,lat],map});
   }else{
     marker.setPosition([lon,lat]);
-    map.setCenter([lon,lat]);
+    map.panTo([lon,lat]);
   }
+
+  // 轨迹
+  if(!polyline){
+    polyline = new AMap.Polyline({
+      path:[],
+      strokeColor:"#22d3ee",
+      strokeWeight:3
+    });
+    map.add(polyline);
+  }
+
+  polyline.setPath(path.map(p=>[p.lon,p.lat]));
 }
 
-// ======================
-startLocate();
+// =====================
+start();
 </script>
 </body>
 </html>
