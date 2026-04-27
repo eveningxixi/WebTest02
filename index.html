@@ -3,215 +3,172 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>访客定位（优化版）</title>
+<title>高精度定位引擎</title>
 
 <script src="https://webapi.amap.com/maps?v=2.0&key=4a37526179c8b959ee1b93a79ddc2e00"></script>
 
 <style>
-body {
-  background: #0b1120;
-  color: #e2e8f0;
-  font-family: sans-serif;
-  padding: 20px;
-}
-.box {
-  max-width: 900px;
-  margin: auto;
-}
-#map {
-  height: 300px;
-  margin-top: 15px;
-  border-radius: 10px;
-}
-.item { margin: 6px 0; }
-.value { color: #22d3ee; }
+body { background:#0b1120;color:#e2e8f0;font-family:sans-serif;padding:20px;}
+.box{max-width:900px;margin:auto;}
+#map{height:320px;margin-top:15px;border-radius:10px;}
+.log{font-size:12px;color:#94a3b8;margin-top:10px;height:120px;overflow:auto;}
+.good{color:#34d399;}
+.bad{color:#f87171;}
 </style>
 </head>
 
 <body>
 <div class="box">
-  <h2>访客定位（增强版）</h2>
-  <div id="status">定位中...</div>
-  <div id="info"></div>
-  <div id="map"></div>
+<h2>高精度定位（收敛模式）</h2>
+<div id="status">初始化中...</div>
+<div id="info"></div>
+<div id="map"></div>
+<div class="log" id="log"></div>
 </div>
 
 <script>
 const AMAP_KEY = '36a759d46f77237403291b98bed755f6';
 
-let visitor = {
-  lat: null,
-  lon: null,
-  accuracy: '',
-  address: '',
-  source: '',
-  confidence: ''
-};
+let best = null;
+let samples = [];
+let watchId = null;
+let map, marker;
 
-// =========================
-// 🚀 双阶段定位
-// =========================
-function locate() {
-  if (!navigator.geolocation) return;
-
-  // 快速
-  navigator.geolocation.getCurrentPosition(pos => {
-    applyPosition(pos, false);
-  }, null, {
-    enableHighAccuracy: false,
-    timeout: 2000,
-    maximumAge: 60000
-  });
-
-  // 精确
-  navigator.geolocation.getCurrentPosition(pos => {
-    applyPosition(pos, true);
-  }, null, {
-    enableHighAccuracy: true,
-    timeout: 10000,
-    maximumAge: 0
-  });
+function log(msg, good=false){
+  const el = document.getElementById('log');
+  el.innerHTML += `<div class="${good?'good':'bad'}">${msg}</div>`;
+  el.scrollTop = el.scrollHeight;
 }
 
-function applyPosition(pos, high) {
-  const { latitude, longitude, accuracy } = pos.coords;
-
-  visitor.lat = latitude;
-  visitor.lon = longitude;
-  visitor.accuracy = Math.round(accuracy) + '米';
-  visitor.source = high ? 'GPS精确定位' : '快速定位';
-
-  reverseGeocode(latitude, longitude);
-}
-
-// =========================
-// 🚀 高德优先反查 + 缓存
-// =========================
-async function reverseGeocode(lat, lon) {
-  const cacheKey = `geo_${lat.toFixed(5)}_${lon.toFixed(5)}`;
-  const cache = localStorage.getItem(cacheKey);
-
-  if (cache) {
-    const data = JSON.parse(cache);
-    applyAddress(data);
+// ======================
+// 🚀 启动高精度定位
+// ======================
+function startLocate(){
+  if(!navigator.geolocation){
+    alert('浏览器不支持定位');
     return;
   }
 
-  try {
-    const url = `https://restapi.amap.com/v3/geocode/regeo?location=${lon},${lat}&key=${AMAP_KEY}&radius=3000&extensions=all`;
+  document.getElementById('status').innerText = '定位中（收敛中...）';
 
+  watchId = navigator.geolocation.watchPosition(onSuccess, onError,{
+    enableHighAccuracy:true,
+    timeout:15000,
+    maximumAge:0
+  });
+
+  // 10秒自动停止
+  setTimeout(stopLocate,10000);
+}
+
+function stopLocate(){
+  if(watchId){
+    navigator.geolocation.clearWatch(watchId);
+    log('定位结束（已收敛）',true);
+    document.getElementById('status').innerText = '定位完成';
+  }
+
+  if(best){
+    reverseGeocode(best.coords.latitude,best.coords.longitude);
+  }
+}
+
+// ======================
+// 📍 定位成功
+// ======================
+function onSuccess(pos){
+  const acc = pos.coords.accuracy;
+  log(`采样: 精度 ${Math.round(acc)}m`);
+
+  // 丢弃垃圾点
+  if(acc > 800){
+    log('丢弃（精度太差）');
+    return;
+  }
+
+  samples.push(pos);
+
+  if(!best || acc < best.coords.accuracy){
+    best = pos;
+    log(`✔ 更新最优: ${Math.round(acc)}m`,true);
+    render(best);
+  }
+
+  // 达到理想精度直接停止
+  if(acc < 50){
+    stopLocate();
+  }
+}
+
+// ======================
+function onError(err){
+  log('定位失败: '+err.message);
+}
+
+// ======================
+// 🧠 逆地理 + 缓存
+// ======================
+async function reverseGeocode(lat,lon){
+  const key = `${lat.toFixed(5)}_${lon.toFixed(5)}`;
+  const cache = localStorage.getItem(key);
+
+  if(cache){
+    applyAddress(JSON.parse(cache));
+    return;
+  }
+
+  try{
+    const url = `https://restapi.amap.com/v3/geocode/regeo?location=${lon},${lat}&key=${AMAP_KEY}&radius=3000&extensions=all`;
     const res = await fetch(url);
     const data = await res.json();
 
-    if (data.status === '1') {
-      localStorage.setItem(cacheKey, JSON.stringify(data));
+    if(data.status==='1'){
+      localStorage.setItem(key,JSON.stringify(data));
       applyAddress(data);
-      return;
     }
-  } catch {}
-
-  // fallback（极少用）
-  fallbackReverse(lat, lon);
-}
-
-// =========================
-// 🌍 fallback
-// =========================
-async function fallbackReverse(lat, lon) {
-  try {
-    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`);
-    const data = await res.json();
-    visitor.address = data.display_name || '未知';
-    render();
-  } catch {
-    visitor.address = '解析失败';
-    render();
+  }catch(e){
+    log('逆地理失败');
   }
 }
 
-// =========================
-// 🧠 地址解析（强化门牌）
-// =========================
-function applyAddress(data) {
-  const comp = data.regeocode.addressComponent;
-
-  const street = comp.streetNumber?.street || '';
-  const number = comp.streetNumber?.number || '';
-
-  let address = data.regeocode.formatted_address;
-
-  // 强化门牌
-  if (!number) {
-    const match = address.match(/(\d+号|\d+-\d+号)/);
-    if (match) address += ' ' + match[0];
-  }
-
-  visitor.address = address;
-
-  calcConfidence();
-  render();
+function applyAddress(data){
+  const addr = data.regeocode.formatted_address;
+  document.getElementById('info').innerHTML += `<div>地址：${addr}</div>`;
 }
 
-// =========================
-// 🎯 精度评估
-// =========================
-function calcConfidence() {
-  const acc = parseInt(visitor.accuracy);
-
-  if (acc < 50) visitor.confidence = '高（门牌/街道级）';
-  else if (acc < 300) visitor.confidence = '中（城区级）';
-  else visitor.confidence = '低（粗略）';
-}
-
-// =========================
-// 🗺️ 地图渲染
-// =========================
-let map, marker;
-
-function renderMap() {
-  if (!visitor.lat) return;
-
-  if (!map) {
-    map = new AMap.Map('map', {
-      zoom: 15,
-      center: [visitor.lon, visitor.lat]
-    });
-  }
-
-  if (!marker) {
-    marker = new AMap.Marker({
-      position: [visitor.lon, visitor.lat],
-      map: map
-    });
-  } else {
-    marker.setPosition([visitor.lon, visitor.lat]);
-    map.setCenter([visitor.lon, visitor.lat]);
-  }
-}
-
-// =========================
-// 🖥️ UI
-// =========================
-function render() {
-  document.getElementById('status').innerText = '定位完成';
+// ======================
+// 🗺️ 地图
+// ======================
+function render(pos){
+  const lat = pos.coords.latitude;
+  const lon = pos.coords.longitude;
 
   document.getElementById('info').innerHTML = `
-    <div class="item">纬度：<span class="value">${visitor.lat}</span></div>
-    <div class="item">经度：<span class="value">${visitor.lon}</span></div>
-    <div class="item">精度：<span class="value">${visitor.accuracy}</span></div>
-    <div class="item">地址：<span class="value">${visitor.address}</span></div>
-    <div class="item">来源：<span class="value">${visitor.source}</span></div>
-    <div class="item">可信度：<span class="value">${visitor.confidence}</span></div>
+    <div>纬度：${lat}</div>
+    <div>经度：${lon}</div>
+    <div>精度：${Math.round(pos.coords.accuracy)} 米</div>
   `;
 
-  renderMap();
+  if(!map){
+    map = new AMap.Map('map',{
+      zoom:16,
+      center:[lon,lat]
+    });
+  }
+
+  if(!marker){
+    marker = new AMap.Marker({
+      position:[lon,lat],
+      map:map
+    });
+  }else{
+    marker.setPosition([lon,lat]);
+    map.setCenter([lon,lat]);
+  }
 }
 
-// =========================
-// 🚀 启动
-// =========================
-locate();
-
+// ======================
+startLocate();
 </script>
 </body>
 </html>
