@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>访客高精度定位</title>
+
+<script src="https://webapi.amap.com/maps?v=2.0&key=4a37526179c8b959ee1b93a79ddc2e00"></script>
+
+<style>
+* { box-sizing: border-box; }
+body {
+  background: #0b1120;
+  color: #e2e8f0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  padding: 20px;
+  margin: 0;
+}
+.box {
+  max-width: 900px;
+  margin: auto;
+}
+#map {
+  height: 350px;
+  margin-top: 15px;
+  border-radius: 10px;
+  border: 1px solid #1e293b;
+}
+.item { 
+  margin: 8px 0; 
+  padding: 8px 12px;
+  background: #1e293b;
+  border-radius: 6px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.label { color: #94a3b8; }
+.value { 
+  color: #22d3ee; 
+  font-weight: 600;
+  font-family: 'SF Mono', monospace;
+}
+.value.gps { color: #4ade80; }
+.value.low { color: #f87171; }
+.value.medium { color: #fbbf24; }
+#status {
+  padding: 12px;
+  background: #1e293b;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #334155;
+  border-top-color: #22d3ee;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.done .spinner { display: none; }
+.done::before {
+  content: '✓';
+  color: #4ade80;
+  font-weight: bold;
+}
+</style>
+</head>
+
+<body>
+<div class="box">
+  <h2>🎯 访客高精度定位</h2>
+  <div id="status"><div class="spinner"></div> 正在请求 GPS 高精度定位...</div>
+  <div id="info"></div>
+  <div id="map"></div>
+</div>
+
+<script>
+const AMAP_KEY = '36a759d46f77237403291b98bed755f6';
+
+let visitor = {
+  lat: null,
+  lon: null,
+  accuracy: '',
+  address: '',
+  source: '',
+  confidence: '',
+  bestAccuracy: Infinity
+};
+
+let watchId = null;
+let timeoutId = null;
+let hasResult = false;
+let map = null;
+let marker = null;
+let circle = null;
+
+// =========================
+// 🎯 高精度定位策略
+// =========================
+function locate() {
+  if (!navigator.geolocation) {
+    updateStatus('浏览器不支持定位', true);
+    return;
+  }
+
+  // 策略：先 watchPosition 持续获取，取最精确的
+  // 同时设置超时兜底
+  timeoutId = setTimeout(() => {
+    if (!hasResult) {
+      stopWatch();
+      updateStatus('GPS 信号弱，使用最佳可用位置', true);
+      // 如果完全没数据，尝试快速定位兜底
+      if (!visitor.lat) {
+        navigator.geolocation.getCurrentPosition(
+          pos => applyPosition(pos, false, true),
+          err => updateStatus('定位失败: ' + err.message, true),
+          { enableHighAccuracy: false, timeout: 5000, maximumAge: 60000 }
+        );
+      }
+    }
+  }, 15000); // 15秒超时
+
+  // 启动高精度监听
+  watchId = navigator.geolocation.watchPosition(
+    pos => {
+      const acc = pos.coords.accuracy;
+      
+      // 记录最佳精度
+      if (acc < visitor.bestAccuracy) {
+        visitor.bestAccuracy = acc;
+      }
+
+      // 精度 < 100米 认为是可用的高精度结果
+      if (acc <= 100) {
+        applyPosition(pos, true, true); // high=true, final=true
+        stopWatch();
+        clearTimeout(timeoutId);
+      } 
+      // 精度 100-500米，先更新UI显示进度，继续监听
+      else if (acc <= 500 && !hasResult) {
+        applyPosition(pos, true, false); // high=true, final=false
+        updateStatus(`GPS 定位中... 当前精度 ${Math.round(acc)}米（持续优化中）`);
+      }
+      // 精度 > 500米，如果已经等了5秒还没好结果，先显示
+      else if (!hasResult && visitor.bestAccuracy > 500) {
+        // 等 watch 第一次回调就显示，但标记为低精度
+        applyPosition(pos, true, false);
+      }
+    },
+    err => {
+      console.error('watchPosition error:', err);
+      // 高精度失败，尝试快速定位
+      if (!hasResult) {
+        navigator.geolocation.getCurrentPosition(
+          pos => applyPosition(pos, false, true),
+          err2 => {
+            updateStatus('定位失败: ' + err2.message, true);
+            clearTimeout(timeoutId);
+          },
+          { enableHighAccuracy: false, timeout: 5000, maximumAge: 60000 }
+        );
+      }
+    },
+    {
+      enableHighAccuracy: true,
+      timeout: 12000,
+      maximumAge: 0
+    }
+  );
+}
+
+function stopWatch() {
+  if (watchId !== null) {
+    navigator.geolocation.clearWatch(watchId);
+    watchId = null;
+  }
+}
+
+function updateStatus(msg, done = false) {
+  const el = document.getElementById('status');
+  el.innerHTML = done 
+    ? msg 
+    : `<div class="spinner"></div> ${msg}`;
+  if (done) el.classList.add('done');
+}
+
+// =========================
+// 📍 应用位置
+// =========================
+function applyPosition(pos, high, final) {
+  const { latitude, longitude, accuracy } = pos.coords;
+
+  visitor.lat = latitude;
+  visitor.lon = longitude;
+  visitor.accuracy = Math.round(accuracy) + '米';
+  visitor.source = high ? 'GPS精确定位' : '网络/IP定位';
+
+  if (final) {
+    hasResult = true;
+    updateStatus(`定位完成 | 最终精度 ${Math.round(accuracy)}米`, true);
+  }
+
+  reverseGeocode(latitude, longitude, final);
+}
+
+// =========================
+// 🗺️ 高德反查 + 缓存
+// =========================
+async function reverseGeocode(lat, lon, final) {
+  const cacheKey = `geo_${lat.toFixed(5)}_${lon.toFixed(5)}`;
+  const cache = localStorage.getItem(cacheKey);
+
+  if (cache) {
+    const data = JSON.parse(cache);
+    applyAddress(data, final);
+    return;
+  }
+
+  try {
+    // 高德 API: location=经度,纬度
+    const url = `https://restapi.amap.com/v3/geocode/regeo?location=${lon},${lat}&key=${AMAP_KEY}&radius=1000&extensions=all`;
+
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (data.status === '1' && data.regeocode) {
+      localStorage.setItem(cacheKey, JSON.stringify(data));
+      applyAddress(data, final);
+      return;
+    }
+  } catch (e) {
+    console.error('高德反查失败:', e);
+  }
+
+  fallbackReverse(lat, lon, final);
+}
+
+// =========================
+// 🌍 fallback
+// =========================
+async function fallbackReverse(lat, lon, final) {
+  try {
+    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`);
+    const data = await res.json();
+    visitor.address = data.display_name || '未知';
+    calcConfidence();
+    if (final) render();
+  } catch {
+    visitor.address = '地址解析失败';
+    calcConfidence();
+    if (final) render();
+  }
+}
+
+// =========================
+// 🧠 地址解析
+// =========================
+function applyAddress(data, final) {
+  const regeo = data.regeocode;
+  const comp = regeo.addressComponent;
+
+  let address = regeo.formatted_address || '';
+
+  // 如果有门牌号信息，强化显示
+  const street = comp.streetNumber?.street || '';
+  const number = comp.streetNumber?.number || '';
+  const direction = comp.streetNumber?.direction || '';
+  const distance = comp.streetNumber?.distance || '';
+
+  if (street && number) {
+    address = `${comp.province || ''}${comp.city || ''}${comp.district || ''}${street}${number}`;
+  }
+
+  // 补充 POI 信息
+  const pois = regeo.pois || [];
+  if (pois.length > 0 && !number) {
+    const nearest = pois[0];
+    address += `（附近：${nearest.name}，约${nearest.distance}米）`;
+  }
+
+  visitor.address = address || '未知位置';
+  calcConfidence();
+  if (final) render();
+}
+
+// =========================
+// 🎯 精度评估
+// =========================
+function calcConfidence() {
+  const acc = parseInt(visitor.accuracy) || 9999;
+
+  if (acc < 20) visitor.confidence = '极高（米级/室内）';
+  else if (acc < 50) visitor.confidence = '高（街道级）';
+  else if (acc < 100) visitor.confidence = '中高（街区级）';
+  else if (acc < 300) visitor.confidence = '中（城区级）';
+  else if (acc < 1000) visitor.confidence = '低（粗略）';
+  else visitor.confidence = '极低（仅城市级）';
+}
+
+// =========================
+// 🗺️ 地图渲染（含精度圆）
+// =========================
+function renderMap() {
+  if (!visitor.lat) return;
+
+  if (!map) {
+    map = new AMap.Map('map', {
+      zoom: 16,
+      center: [visitor.lon, visitor.lat]
+    });
+  }
+
+  // 标记点
+  if (!marker) {
+    marker = new AMap.Marker({
+      position: [visitor.lon, visitor.lat],
+      map: map,
+      title: '当前位置'
+    });
+  } else {
+    marker.setPosition([visitor.lon, visitor.lat]);
+  }
+
+  // 精度圆
+  const acc = parseInt(visitor.accuracy) || 0;
+  const radius = Math.max(acc, 10); // 最小显示10米
+
+  if (!circle) {
+    circle = new AMap.Circle({
+      center: [visitor.lon, visitor.lat],
+      radius: radius,
+      fillColor: '#22d3ee',
+      fillOpacity: 0.15,
+      strokeColor: '#22d3ee',
+      strokeWeight: 2,
+      strokeOpacity: 0.6,
+      map: map
+    });
+  } else {
+    circle.setCenter([visitor.lon, visitor.lat]);
+    circle.setRadius(radius);
+  }
+
+  // 根据精度调整缩放
+  let zoom = 16;
+  if (acc < 20) zoom = 18;
+  else if (acc < 100) zoom = 17;
+  else if (acc < 500) zoom = 15;
+  else zoom = 13;
+
+  map.setZoomAndCenter(zoom, [visitor.lon, visitor.lat]);
+}
+
+// =========================
+// 🖥️ UI
+// =========================
+function render() {
+  const acc = parseInt(visitor.accuracy) || 9999;
+  const accClass = acc < 50 ? 'gps' : (acc < 300 ? 'medium' : 'low');
+  const confClass = acc < 100 ? 'gps' : (acc < 500 ? 'medium' : 'low');
+
+  document.getElementById('info').innerHTML = `
+    <div class="item">
+      <span class="label">📍 纬度</span>
+      <span class="value">${visitor.lat?.toFixed(6) || '-'}</span>
+    </div>
+    <div class="item">
+      <span class="label">📍 经度</span>
+      <span class="value">${visitor.lon?.toFixed(6) || '-'}</span>
+    </div>
+    <div class="item">
+      <span class="label">🎯 精度半径</span>
+      <span class="value ${accClass}">${visitor.accuracy}</span>
+    </div>
+    <div class="item">
+      <span class="label">🏠 地址</span>
+      <span class="value" style="max-width:60%;text-align:right;">${visitor.address || '解析中...'}</span>
+    </div>
+    <div class="item">
+      <span class="label">📡 定位来源</span>
+      <span class="value ${visitor.source.includes('GPS') ? 'gps' : 'medium'}">${visitor.source}</span>
+    </div>
+    <div class="item">
+      <span class="label">✅ 可信度</span>
+      <span class="value ${confClass}">${visitor.confidence}</span>
+    </div>
+  `;
+
+  renderMap();
+}
+
+// =========================
+// 🚀 启动
+// =========================
+locate();
+</script>
+</body>
+</html>
