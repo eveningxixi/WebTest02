@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>访客高精度定位</title>
+<title>访客高精度定位（坐标系修正版）</title>
 
 <script src="https://webapi.amap.com/maps?v=2.0&key=4a37526179c8b959ee1b93a79ddc2e00"></script>
 
@@ -16,10 +16,7 @@ body {
   padding: 20px;
   margin: 0;
 }
-.box {
-  max-width: 900px;
-  margin: auto;
-}
+.box { max-width: 900px; margin: auto; }
 #map {
   height: 350px;
   margin-top: 15px;
@@ -68,12 +65,16 @@ body {
   color: #4ade80;
   font-weight: bold;
 }
+.warn {
+  background: #451a03 !important;
+  color: #fbbf24 !important;
+}
 </style>
 </head>
 
 <body>
 <div class="box">
-  <h2>🎯 访客高精度定位</h2>
+  <h2>🎯 访客高精度定位（坐标系修正）</h2>
   <div id="status"><div class="spinner"></div> 正在请求 GPS 高精度定位...</div>
   <div id="info"></div>
   <div id="map"></div>
@@ -83,8 +84,10 @@ body {
 const AMAP_KEY = '36a759d46f77237403291b98bed755f6';
 
 let visitor = {
-  lat: null,
-  lon: null,
+  lat: null,      // GCJ-02（用于显示和地图）
+  lon: null,      // GCJ-02
+  rawLat: null,   // WGS-84（原始）
+  rawLon: null,   // WGS-84
   accuracy: '',
   address: '',
   source: '',
@@ -100,6 +103,48 @@ let marker = null;
 let circle = null;
 
 // =========================
+// 🌍 WGS-84 → GCJ-02 坐标转换
+// =========================
+const PI = 3.14159265358979324;
+const A = 6378245.0;
+const EE = 0.00669342162296594323;
+
+function outOfChina(lng, lat) {
+  return (lng < 72.004 || lng > 137.8347) || (lat < 0.8293 || lat > 55.8271);
+}
+
+function transformLat(lng, lat) {
+  let ret = -100.0 + 2.0 * lng + 3.0 * lat + 0.2 * lat * lat + 0.1 * lng * lat + 0.2 * Math.sqrt(Math.abs(lng));
+  ret += (20.0 * Math.sin(6.0 * lng * PI) + 20.0 * Math.sin(2.0 * lng * PI)) * 2.0 / 3.0;
+  ret += (20.0 * Math.sin(lat * PI) + 40.0 * Math.sin(lat / 3.0 * PI)) * 2.0 / 3.0;
+  ret += (160.0 * Math.sin(lat / 12.0 * PI) + 320 * Math.sin(lat * PI / 30.0)) * 2.0 / 3.0;
+  return ret;
+}
+
+function transformLng(lng, lat) {
+  let ret = 300.0 + lng + 2.0 * lat + 0.1 * lng * lng + 0.1 * lng * lat + 0.1 * Math.sqrt(Math.abs(lng));
+  ret += (20.0 * Math.sin(6.0 * lng * PI) + 20.0 * Math.sin(2.0 * lng * PI)) * 2.0 / 3.0;
+  ret += (20.0 * Math.sin(lng * PI) + 40.0 * Math.sin(lng / 3.0 * PI)) * 2.0 / 3.0;
+  ret += (150.0 * Math.sin(lng / 12.0 * PI) + 300.0 * Math.sin(lng / 30.0 * PI)) * 2.0 / 3.0;
+  return ret;
+}
+
+function wgs84ToGcj02(lng, lat) {
+  if (outOfChina(lng, lat)) return [lng, lat];
+  
+  let dLat = transformLat(lng - 105.0, lat - 35.0);
+  let dLng = transformLng(lng - 105.0, lat - 35.0);
+  const radLat = lat / 180.0 * PI;
+  let magic = Math.sin(radLat);
+  magic = 1 - EE * magic * magic;
+  const sqrtMagic = Math.sqrt(magic);
+  dLat = (dLat * 180.0) / ((A * (1 - EE)) / (magic * sqrtMagic) * PI);
+  dLng = (dLng * 180.0) / (A / sqrtMagic * Math.cos(radLat) * PI);
+  
+  return [lng + dLng, lat + dLat];
+}
+
+// =========================
 // 🎯 高精度定位策略
 // =========================
 function locate() {
@@ -108,13 +153,11 @@ function locate() {
     return;
   }
 
-  // 策略：先 watchPosition 持续获取，取最精确的
-  // 同时设置超时兜底
+  // 15秒超时兜底
   timeoutId = setTimeout(() => {
     if (!hasResult) {
       stopWatch();
       updateStatus('GPS 信号弱，使用最佳可用位置', true);
-      // 如果完全没数据，尝试快速定位兜底
       if (!visitor.lat) {
         navigator.geolocation.getCurrentPosition(
           pos => applyPosition(pos, false, true),
@@ -123,38 +166,26 @@ function locate() {
         );
       }
     }
-  }, 15000); // 15秒超时
+  }, 15000);
 
-  // 启动高精度监听
   watchId = navigator.geolocation.watchPosition(
     pos => {
       const acc = pos.coords.accuracy;
-      
-      // 记录最佳精度
-      if (acc < visitor.bestAccuracy) {
-        visitor.bestAccuracy = acc;
-      }
+      if (acc < visitor.bestAccuracy) visitor.bestAccuracy = acc;
 
-      // 精度 < 100米 认为是可用的高精度结果
       if (acc <= 100) {
-        applyPosition(pos, true, true); // high=true, final=true
+        applyPosition(pos, true, true);
         stopWatch();
         clearTimeout(timeoutId);
-      } 
-      // 精度 100-500米，先更新UI显示进度，继续监听
-      else if (acc <= 500 && !hasResult) {
-        applyPosition(pos, true, false); // high=true, final=false
+      } else if (acc <= 500 && !hasResult) {
+        applyPosition(pos, true, false);
         updateStatus(`GPS 定位中... 当前精度 ${Math.round(acc)}米（持续优化中）`);
-      }
-      // 精度 > 500米，如果已经等了5秒还没好结果，先显示
-      else if (!hasResult && visitor.bestAccuracy > 500) {
-        // 等 watch 第一次回调就显示，但标记为低精度
+      } else if (!hasResult && visitor.bestAccuracy > 500) {
         applyPosition(pos, true, false);
       }
     },
     err => {
       console.error('watchPosition error:', err);
-      // 高精度失败，尝试快速定位
       if (!hasResult) {
         navigator.geolocation.getCurrentPosition(
           pos => applyPosition(pos, false, true),
@@ -166,11 +197,7 @@ function locate() {
         );
       }
     },
-    {
-      enableHighAccuracy: true,
-      timeout: 12000,
-      maximumAge: 0
-    }
+    { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
   );
 }
 
@@ -183,20 +210,25 @@ function stopWatch() {
 
 function updateStatus(msg, done = false) {
   const el = document.getElementById('status');
-  el.innerHTML = done 
-    ? msg 
-    : `<div class="spinner"></div> ${msg}`;
+  el.innerHTML = done ? msg : `<div class="spinner"></div> ${msg}`;
   if (done) el.classList.add('done');
 }
 
 // =========================
-// 📍 应用位置
+// 📍 应用位置（关键：坐标转换）
 // =========================
 function applyPosition(pos, high, final) {
   const { latitude, longitude, accuracy } = pos.coords;
 
-  visitor.lat = latitude;
-  visitor.lon = longitude;
+  // 保存原始 WGS-84
+  visitor.rawLat = latitude;
+  visitor.rawLon = longitude;
+  
+  // 转换为 GCJ-02（国内地图标准）
+  const [gcjLng, gcjLat] = wgs84ToGcj02(longitude, latitude);
+  visitor.lat = gcjLat;
+  visitor.lon = gcjLng;
+  
   visitor.accuracy = Math.round(accuracy) + '米';
   visitor.source = high ? 'GPS精确定位' : '网络/IP定位';
 
@@ -205,7 +237,8 @@ function applyPosition(pos, high, final) {
     updateStatus(`定位完成 | 最终精度 ${Math.round(accuracy)}米`, true);
   }
 
-  reverseGeocode(latitude, longitude, final);
+  // 用 GCJ-02 坐标进行反查
+  reverseGeocode(gcjLat, gcjLng, final);
 }
 
 // =========================
@@ -222,9 +255,9 @@ async function reverseGeocode(lat, lon, final) {
   }
 
   try {
-    // 高德 API: location=经度,纬度
+    // 高德 API 接收 GCJ-02 坐标，格式：经度,纬度
     const url = `https://restapi.amap.com/v3/geocode/regeo?location=${lon},${lat}&key=${AMAP_KEY}&radius=1000&extensions=all`;
-
+    
     const res = await fetch(url);
     const data = await res.json();
 
@@ -265,18 +298,13 @@ function applyAddress(data, final) {
   const comp = regeo.addressComponent;
 
   let address = regeo.formatted_address || '';
-
-  // 如果有门牌号信息，强化显示
   const street = comp.streetNumber?.street || '';
   const number = comp.streetNumber?.number || '';
-  const direction = comp.streetNumber?.direction || '';
-  const distance = comp.streetNumber?.distance || '';
 
   if (street && number) {
     address = `${comp.province || ''}${comp.city || ''}${comp.district || ''}${street}${number}`;
   }
 
-  // 补充 POI 信息
   const pois = regeo.pois || [];
   if (pois.length > 0 && !number) {
     const nearest = pois[0];
@@ -293,7 +321,6 @@ function applyAddress(data, final) {
 // =========================
 function calcConfidence() {
   const acc = parseInt(visitor.accuracy) || 9999;
-
   if (acc < 20) visitor.confidence = '极高（米级/室内）';
   else if (acc < 50) visitor.confidence = '高（街道级）';
   else if (acc < 100) visitor.confidence = '中高（街区级）';
@@ -303,7 +330,7 @@ function calcConfidence() {
 }
 
 // =========================
-// 🗺️ 地图渲染（含精度圆）
+// 🗺️ 地图渲染（GCJ-02 坐标）
 // =========================
 function renderMap() {
   if (!visitor.lat) return;
@@ -315,7 +342,6 @@ function renderMap() {
     });
   }
 
-  // 标记点
   if (!marker) {
     marker = new AMap.Marker({
       position: [visitor.lon, visitor.lat],
@@ -326,9 +352,8 @@ function renderMap() {
     marker.setPosition([visitor.lon, visitor.lat]);
   }
 
-  // 精度圆
   const acc = parseInt(visitor.accuracy) || 0;
-  const radius = Math.max(acc, 10); // 最小显示10米
+  const radius = Math.max(acc, 10);
 
   if (!circle) {
     circle = new AMap.Circle({
@@ -346,7 +371,6 @@ function renderMap() {
     circle.setRadius(radius);
   }
 
-  // 根据精度调整缩放
   let zoom = 16;
   if (acc < 20) zoom = 18;
   else if (acc < 100) zoom = 17;
@@ -366,12 +390,16 @@ function render() {
 
   document.getElementById('info').innerHTML = `
     <div class="item">
-      <span class="label">📍 纬度</span>
+      <span class="label">📍 GCJ-02 纬度</span>
       <span class="value">${visitor.lat?.toFixed(6) || '-'}</span>
     </div>
     <div class="item">
-      <span class="label">📍 经度</span>
+      <span class="label">📍 GCJ-02 经度</span>
       <span class="value">${visitor.lon?.toFixed(6) || '-'}</span>
+    </div>
+    <div class="item">
+      <span class="label">🌐 WGS-84 原始</span>
+      <span class="value" style="font-size:12px;color:#94a3b8;">${visitor.rawLat?.toFixed(6) || '-'}, ${visitor.rawLon?.toFixed(6) || '-'}</span>
     </div>
     <div class="item">
       <span class="label">🎯 精度半径</span>
