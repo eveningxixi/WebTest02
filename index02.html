@@ -74,7 +74,7 @@ body {
 
 <body>
 <div class="box">
-  <h2>🎯 访客高精度定位（坐标系修正）</h2>
+  <h2>🎯 访客高精度定位（坐标系修正 radius=3000）</h2>
   <div id="status"><div class="spinner"></div> 正在请求 GPS 高精度定位...</div>
   <div id="info"></div>
   <div id="map"></div>
@@ -256,7 +256,7 @@ async function reverseGeocode(lat, lon, final) {
 
   try {
     // 高德 API 接收 GCJ-02 坐标，格式：经度,纬度
-    const url = `https://restapi.amap.com/v3/geocode/regeo?location=${lon},${lat}&key=${AMAP_KEY}&radius=1000&extensions=all`;
+    const url = `https://restapi.amap.com/v3/geocode/regeo?location=${lon},${lat}&key=${AMAP_KEY}&radius=3000&extensions=all`;
     
     const res = await fetch(url);
     const data = await res.json();
