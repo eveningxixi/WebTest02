@@ -31,7 +31,7 @@ body {
 
 <body>
 <div class="box">
-  <h2>访客定位（增强版）</h2>
+  <h2>访客定位（GCJ-02坐标转换）</h2>
   <div id="status">定位中...</div>
   <div id="info"></div>
   <div id="map"></div>
@@ -123,23 +123,22 @@ function applyPosition(pos, high) {
   const { latitude, longitude, accuracy } = pos.coords;
 
 
- 
+ // GCJ-02坐标转换
 const [gclLng, gclLat] = wgs84ToGcj02(longitude, latitude);
-
 visitor.lon = gclLng;
 visitor.lat = gclLat;
 
   visitor.accuracy = Math.round(accuracy) + '米';
   visitor.source = high ? 'GPS精确定位' : '快速定位';
 
-  reverseGeocode(latitude, longitude);
+  reverseGeocode(gclLng, gclLat);
 }
 
 // =========================
 // 🚀 高德优先反查 + 缓存
 // =========================
-async function reverseGeocode(lat, lon) {
-  const cacheKey = `geo_${lat.toFixed(5)}_${lon.toFixed(5)}`;
+async function reverseGeocode(lon, lat) {
+  const cacheKey = `geo_${lon.toFixed(5)}_${lat.toFixed(5)}`;
   const cache = localStorage.getItem(cacheKey);
 
   if (cache) {
@@ -162,13 +161,13 @@ async function reverseGeocode(lat, lon) {
   } catch {}
 
   // fallback（极少用）
-  fallbackReverse(lat, lon);
+  fallbackReverse(lon, lat);
 }
 
 // =========================
 // 🌍 fallback
 // =========================
-async function fallbackReverse(lat, lon) {
+async function fallbackReverse(lon, lat) {
   try {
     const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`);
     const data = await res.json();
@@ -247,8 +246,8 @@ function render() {
   document.getElementById('status').innerText = '定位完成';
 
   document.getElementById('info').innerHTML = `
-    <div class="item">纬度：<span class="value">${visitor.lat}</span></div>
-    <div class="item">经度：<span class="value">${visitor.lon}</span></div>
+  <div class="item">GCJ-02经度：<span class="value">${visitor.lon}</span></div>
+  <div class="item">GCJ-02纬度：<span class="value">${visitor.lat}</span></div>    
     <div class="item">精度：<span class="value">${visitor.accuracy}</span></div>
     <div class="item">地址：<span class="value">${visitor.address}</span></div>
     <div class="item">来源：<span class="value">${visitor.source}</span></div>
