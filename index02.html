@@ -244,15 +244,15 @@ function applyPosition(pos, high, final) {
 // =========================
 // 🗺️ 高德反查 + 缓存
 // =========================
-async function reverseGeocode(lat, lon, final) {
-  const cacheKey = `geo_${lat.toFixed(5)}_${lon.toFixed(5)}`;
+async function reverseGeocode(lon, lat, final) {
+  const cacheKey = `geo_${lon.toFixed(5)}_${lat.toFixed(5)}`;
   const cache = localStorage.getItem(cacheKey);
 
-  if (cache) {
-    const data = JSON.parse(cache);
-    applyAddress(data, final);
-    return;
-  }
+  // if (cache) {
+  //   const data = JSON.parse(cache);
+  //   applyAddress(data, final);
+  //   return;
+  // }
 
   try {
     // 高德 API 接收 GCJ-02 坐标，格式：经度,纬度
