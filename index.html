@@ -119,11 +119,10 @@ function locate() {
   });
 }
 
+// 应用位置
 function applyPosition(pos, high) {
   const { latitude, longitude, accuracy } = pos.coords;
-
-
- // GCJ-02坐标转换
+ // WGS-84 → GCJ-02 坐标转换
 const [gclLng, gclLat] = wgs84ToGcj02(longitude, latitude);
 visitor.lon = gclLng;
 visitor.lat = gclLat;
@@ -188,6 +187,7 @@ function applyAddress(data) {
   const street = comp.streetNumber?.street || '';
   const number = comp.streetNumber?.number || '';
 
+  // 获取地址
   let address = data.regeocode.formatted_address;
 
   // 强化门牌
@@ -212,6 +212,7 @@ function calcConfidence() {
   else if (acc < 300) visitor.confidence = '中（城区级）';
   else visitor.confidence = '低（粗略）';
 }
+
 
 // =========================
 // 🗺️ 地图渲染

@@ -1,0 +1,850 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>访客分析</title>
+  <script src="https://webapi.amap.com/maps?v=2.0&key=4a37526179c8b959ee1b93a79ddc2e00"></script>
+  <style>
+    :root {
+      --bg-0: #050915;
+      --bg-1: #0b1120;
+      --panel: rgba(10, 20, 40, 0.72);
+      --panel-strong: rgba(10, 20, 40, 0.92);
+      --line: rgba(148, 163, 184, 0.2);
+      --line-strong: rgba(51, 65, 85, 0.9);
+      --text-0: #e2e8f0;
+      --text-1: #94a3b8;
+      --accent: #22d3ee;
+      --accent-2: #a78bfa;
+      --ok: #34d399;
+      --warn: #fbbf24;
+      --danger: #f87171;
+    }
+
+    body {
+      background:
+        radial-gradient(circle at 15% 10%, rgba(56, 189, 248, 0.22), transparent 42%),
+        radial-gradient(circle at 85% 0%, rgba(167, 139, 250, 0.22), transparent 35%),
+        radial-gradient(circle at 50% 100%, rgba(45, 212, 191, 0.15), transparent 45%),
+        var(--bg-1);
+      color: var(--text-0);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      margin: 0;
+      padding: 24px;
+      box-sizing: border-box;
+    }
+
+    .box {
+      width: 100%;
+      max-width: 820px;
+      background:
+        linear-gradient(145deg, rgba(30, 41, 59, 0.15), rgba(15, 23, 42, 0.05)),
+        var(--panel);
+      border: 1px solid var(--line);
+      backdrop-filter: blur(14px);
+      border-radius: 22px;
+      box-shadow:
+        0 24px 56px rgba(2, 6, 23, 0.5),
+        inset 0 1px 0 rgba(255, 255, 255, 0.06);
+      padding: 26px;
+    }
+
+    .title {
+      margin: 0 0 6px;
+      font-size: 28px;
+      letter-spacing: 0.3px;
+      font-weight: 700;
+    }
+
+    #status {
+      font-size: 18px;
+      margin-bottom: 14px;
+      min-height: 28px;
+      font-weight: 600;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    .action-btn {
+      border: 1px solid rgba(34, 211, 238, 0.45);
+      background: linear-gradient(135deg, rgba(14, 116, 144, 0.45), rgba(76, 29, 149, 0.3));
+      color: #d7fbff;
+      border-radius: 12px;
+      padding: 10px 14px;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.2px;
+      cursor: pointer;
+      transition: all .22s ease;
+    }
+
+    .action-btn:hover {
+      transform: translateY(-1px) scale(1.01);
+      background: linear-gradient(135deg, rgba(8, 145, 178, 0.56), rgba(109, 40, 217, 0.38));
+      box-shadow: 0 8px 24px rgba(34, 211, 238, 0.2);
+    }
+
+    .action-btn:disabled {
+      cursor: not-allowed;
+      opacity: 0.6;
+      transform: none;
+    }
+
+    .subtitle {
+      margin: 0 0 20px;
+      color: var(--text-1);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    #details {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 14px;
+    }
+
+    .section {
+      background: var(--panel-strong);
+      border: 1px solid var(--line-strong);
+      border-radius: 14px;
+      padding: 14px;
+      text-align: left;
+    }
+
+    .section-title {
+      margin: 0 0 10px;
+      color: #dbeafe;
+      font-size: 14px;
+      letter-spacing: 0.2px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .item-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .item {
+      padding: 12px;
+      border-radius: 12px;
+      background: linear-gradient(140deg, rgba(30, 41, 59, 0.5), rgba(15, 23, 42, 0.6));
+      border: 1px solid rgba(71, 85, 105, 0.55);
+    }
+
+    .coord-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .coord-box {
+      padding: 10px;
+      border-radius: 10px;
+      background: rgba(15, 23, 42, 0.72);
+      border: 1px solid rgba(56, 189, 248, 0.28);
+      min-height: 62px;
+      display: grid;
+      align-content: center;
+      gap: 4px;
+    }
+
+    .coord-title {
+      color: var(--text-1);
+      font-size: 12px;
+    }
+
+    .coord-value {
+      color: #67e8f9;
+      font-weight: 700;
+      font-size: 13px;
+      letter-spacing: 0.2px;
+      word-break: break-all;
+    }
+
+    .detail-address-wrap {
+      grid-column: 1 / -1;
+    }
+
+    .detail-address-box {
+      margin-top: 8px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid rgba(167, 139, 250, 0.35);
+      color: #e0e7ff;
+      font-size: 14px;
+      line-height: 1.65;
+      min-height: 48px;
+      word-break: break-word;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+
+    .label {
+      color: var(--text-1);
+    }
+
+    .value {
+      color: var(--accent);
+      font-weight: 700;
+      word-break: break-all;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 3px 10px;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .badge-high {
+      color: #d1fae5;
+      background: rgba(16, 185, 129, 0.2);
+      border: 1px solid rgba(52, 211, 153, 0.6);
+    }
+
+    .badge-mid {
+      color: #fef3c7;
+      background: rgba(245, 158, 11, 0.16);
+      border: 1px solid rgba(251, 191, 36, 0.6);
+    }
+
+    .badge-low {
+      color: #fee2e2;
+      background: rgba(239, 68, 68, 0.16);
+      border: 1px solid rgba(248, 113, 113, 0.55);
+    }
+
+    .success {
+      color: var(--ok);
+    }
+
+    .fail {
+      color: var(--danger);
+    }
+
+    .warn {
+      color: var(--warn);
+    }
+
+    .loading {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: #cbd5e1;
+    }
+
+    .dots {
+      display: inline-flex;
+      gap: 4px;
+    }
+
+    .dots i {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      opacity: .35;
+      animation: blink 1.1s infinite ease-in-out;
+    }
+
+    .dots i:nth-child(2) {
+      animation-delay: .15s;
+    }
+
+    .dots i:nth-child(3) {
+      animation-delay: .3s;
+    }
+
+    @keyframes blink {
+
+      0%,
+      80%,
+      100% {
+        opacity: .25;
+        transform: translateY(0);
+      }
+
+      40% {
+        opacity: 1;
+        transform: translateY(-2px);
+      }
+    }
+
+    @media (max-width: 768px) {
+      body {
+        padding: 12px;
+        align-items: flex-start;
+      }
+
+      .box {
+        border-radius: 16px;
+        padding: 16px;
+        margin-top: env(safe-area-inset-top, 8px);
+        margin-bottom: env(safe-area-inset-bottom, 8px);
+      }
+
+      .title {
+        font-size: 22px;
+      }
+
+      .topbar {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+      }
+
+      .action-btn {
+        width: 100%;
+        padding: 10px 12px;
+        font-size: 14px;
+      }
+
+      #status {
+        font-size: 16px;
+        min-height: 24px;
+      }
+
+      .subtitle {
+        font-size: 13px;
+        margin-bottom: 14px;
+      }
+
+      #details {
+        grid-template-columns: 1fr;
+        gap: 10px;
+      }
+
+      .section {
+        padding: 12px;
+      }
+
+      .section-title {
+        margin-bottom: 8px;
+      }
+
+      .item-list {
+        gap: 8px;
+      }
+
+      .item {
+        padding: 10px;
+        font-size: 13px;
+      }
+
+      .coord-grid {
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="box">
+    <h1 class="title">访客分析面板</h1>
+    <div class="topbar">
+      <div id="status">正在采集数据...</div>
+      <button id="relocateBtn" class="action-btn" type="button">重新定位</button>
+    </div>
+    <p class="subtitle">采集设备信息、IP 地址与浏览器定位坐标（通过阿里接口做 IP 逆地理编码）。</p>
+    <div id="details"></div>
+    <div id="map"></div>
+  </div>
+
+  <script>
+    const AMAP_KEY = '36a759d46f77237403291b98bed755f6';
+
+    let visitor = {
+      lat: null,
+      lon: null,
+      country: '',
+      region: '',
+      city: '',
+      accuracy: '',
+      address: '',
+      source: '',
+      confidenceLevel: 'badge-low',
+      confidence: '',
+      geoResolveStatus: '',
+    };
+
+    const visitorData = {
+      timestamp: new Date().toISOString(),
+      ip: {},
+      geo: visitor,
+      device: {},
+      fingerprint: ''
+    };
+
+
+    let isLocating = false;
+
+
+
+    // #region  🌍 WGS-84 → GCJ-02 坐标转换
+    const PI = 3.14159265358979324;
+    const A = 6378245.0;
+    const EE = 0.00669342162296594323;
+
+    function outOfChina(lng, lat) {
+      return (lng < 72.004 || lng > 137.8347) || (lat < 0.8293 || lat > 55.8271);
+    }
+
+    function transformLat(lng, lat) {
+      let ret = -100.0 + 2.0 * lng + 3.0 * lat + 0.2 * lat * lat + 0.1 * lng * lat + 0.2 * Math.sqrt(Math.abs(lng));
+      ret += (20.0 * Math.sin(6.0 * lng * PI) + 20.0 * Math.sin(2.0 * lng * PI)) * 2.0 / 3.0;
+      ret += (20.0 * Math.sin(lat * PI) + 40.0 * Math.sin(lat / 3.0 * PI)) * 2.0 / 3.0;
+      ret += (160.0 * Math.sin(lat / 12.0 * PI) + 320 * Math.sin(lat * PI / 30.0)) * 2.0 / 3.0;
+      return ret;
+    }
+
+    function transformLng(lng, lat) {
+      let ret = 300.0 + lng + 2.0 * lat + 0.1 * lng * lng + 0.1 * lng * lat + 0.1 * Math.sqrt(Math.abs(lng));
+      ret += (20.0 * Math.sin(6.0 * lng * PI) + 20.0 * Math.sin(2.0 * lng * PI)) * 2.0 / 3.0;
+      ret += (20.0 * Math.sin(lng * PI) + 40.0 * Math.sin(lng / 3.0 * PI)) * 2.0 / 3.0;
+      ret += (150.0 * Math.sin(lng / 12.0 * PI) + 300.0 * Math.sin(lng / 30.0 * PI)) * 2.0 / 3.0;
+      return ret;
+    }
+
+    function wgs84ToGcj02(lng, lat) {
+      if (outOfChina(lng, lat)) return [lng, lat];
+
+      let dLat = transformLat(lng - 105.0, lat - 35.0);
+      let dLng = transformLng(lng - 105.0, lat - 35.0);
+      const radLat = lat / 180.0 * PI;
+      let magic = Math.sin(radLat);
+      magic = 1 - EE * magic * magic;
+      const sqrtMagic = Math.sqrt(magic);
+      dLat = (dLat * 180.0) / ((A * (1 - EE)) / (magic * sqrtMagic) * PI);
+      dLng = (dLng * 180.0) / (A / sqrtMagic * Math.cos(radLat) * PI);
+
+      return [lng + dLng, lat + dLat];
+    }
+
+    // #endregion 坐标转换
+
+    // #region 定位
+    // 🚀 双阶段定位
+    async function locate() {
+      if (!navigator.geolocation) return;
+
+      // 精确
+      navigator.geolocation.getCurrentPosition(pos => {
+        applyPosition(pos, true);
+      }, null, {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
+      });
+
+      // 快速
+      navigator.geolocation.getCurrentPosition(pos => {
+        applyPosition(pos, false);
+      }, null, {
+        enableHighAccuracy: false,
+        timeout: 2000,
+        maximumAge: 60000
+      });
+
+      // 精确
+      navigator.geolocation.getCurrentPosition(pos => {
+        applyPosition(pos, true);
+      }, null, {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
+      });
+    }
+
+    // 应用位置
+    function applyPosition(pos, high) {
+      const { latitude, longitude, accuracy } = pos.coords;
+      // WGS-84 → GCJ-02 坐标转换
+      const [gclLng, gclLat] = wgs84ToGcj02(longitude, latitude);
+      visitor.lon = gclLng;
+      visitor.lat = gclLat;
+      visitor.geoResolveStatus = 'GCJ-02 坐标已获取';
+
+      visitor.accuracy = Math.round(accuracy) + '米';
+      visitor.source = high ? 'GPS精确定位' : '快速定位';
+
+      reverseGeocode(gclLng, gclLat);
+    }
+
+
+    // 🚀 高德优先反查 + 缓存
+    async function reverseGeocode(lon, lat) {
+      const cacheKey = `geo_${lon.toFixed(5)}_${lat.toFixed(5)}`;
+      const cache = localStorage.getItem(cacheKey);
+
+      if (cache) {
+        const data = JSON.parse(cache);
+        applyAddress(data);
+        return;
+      }
+
+      try {
+        const url = `https://restapi.amap.com/v3/geocode/regeo?location=${lon},${lat}&key=${AMAP_KEY}&radius=3000&extensions=all`;
+
+        const res = await fetch(url);
+        const data = await res.json();
+
+        if (data.status === '1') {
+          localStorage.setItem(cacheKey, JSON.stringify(data));
+          applyAddress(data);
+          return;
+        }
+      } catch { }
+
+      // fallback（极少用）
+      fallbackReverse(lon, lat);
+    }
+
+    // 🌍 fallback
+    async function fallbackReverse(lon, lat) {
+      try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`);
+        const data = await res.json();
+        visitor.address = data.display_name || '未知';
+        render();
+      } catch {
+        visitor.address = '解析失败';
+        render();
+      }
+    }
+
+    // 🧠 地址解析（强化门牌）
+    function applyAddress(data) {
+      const comp = data.regeocode.addressComponent;
+
+      const street = comp.streetNumber?.street || '';
+      const number = comp.streetNumber?.number || '';
+
+      // 获取地址
+      let address = data.regeocode.formatted_address;
+
+      // 强化门牌
+      if (!number) {
+        const match = address.match(/(\d+号|\d+-\d+号)/);
+        if (match) address += ' ' + match[0];
+      }
+
+      visitor.address = address;
+      // visitor.country = comp.country;
+      // visitor.region = comp.province;
+      // visitor.city = comp.city;
+      console.log(visitor.address);
+      showDetails(); // 显示详细信息
+      calcConfidence();
+      render();
+    }
+
+    // 🎯 精度评估
+    function calcConfidence() {
+      const acc = parseInt(visitor.accuracy);
+
+      if (acc < 50) {
+        visitor.confidenceLevel = 'badge-high';
+        visitor.confidence = '高（门牌/街道级）';
+      }
+      else if (acc < 300) {
+        visitor.confidenceLevel = 'badge-mid';
+        visitor.confidence = '中（城区级）';
+      }
+      else {
+        visitor.confidenceLevel = 'badge-low';
+        visitor.confidence = '低（粗略）';
+      }
+    }
+
+    // 地图相关
+    let map, marker;
+
+    // 🗺️ 地图渲染
+    function renderMap() {
+      if (!visitor.lat) return;
+
+      if (!map) {
+        map = new AMap.Map('map', {
+          zoom: 15,
+          center: [visitor.lon, visitor.lat]
+        });
+      }
+
+      if (!marker) {
+        marker = new AMap.Marker({
+          position: [visitor.lon, visitor.lat],
+          map: map
+        });
+      } else {
+        marker.setPosition([visitor.lon, visitor.lat]);
+        map.setCenter([visitor.lon, visitor.lat]);
+      }
+    }
+
+    // =========================
+    // 🖥️ UI
+    // =========================
+    function render() {
+      // document.getElementById('status').innerText = '定位完成';
+
+      // document.getElementById('info').innerHTML = `
+      // <div class="item">GCJ-02经度：<span class="value">${visitor.lon}</span></div>
+      // <div class="item">GCJ-02纬度：<span class="value">${visitor.lat}</span></div>    
+      //   <div class="item">精度：<span class="value">${visitor.accuracy}</span></div>
+      //   <div class="item">地址：<span class="value">${visitor.address}</span></div>
+      //   <div class="item">来源：<span class="value">${visitor.source}</span></div>
+      //   <div class="item">可信度：<span class="value">${visitor.confidence}</span></div>
+      // `;
+
+      renderMap();
+    }
+
+    // #endregion 定位
+
+
+
+
+    // 设置状态为加载中
+    function setLoadingStatus(message = '正在采集数据') {
+      const statusEl = document.getElementById('status');
+      statusEl.innerHTML = `<span class="loading">${message}<span class="dots"><i></i><i></i><i></i></span></span>`;
+    }
+
+    // 设置状态为完成
+    function setStatusDone(message = '数据采集完成') {
+      const statusEl = document.getElementById('status');
+      statusEl.innerHTML = `<span class="success">${message}</span>`;
+    }
+
+    // 设置重新定位按钮状态
+    function setRelocateLoading(loading) {
+      isLocating = loading;
+      const btn = document.getElementById('relocateBtn');
+      if (!btn) return;
+      btn.disabled = loading;
+      btn.textContent = loading ? '定位中...' : '重新定位';
+    }
+
+    // 检测浏览器类型
+    function detectBrowser(ua) {
+      if (/Edg\//.test(ua)) return 'Edge';
+      if (/OPR\//.test(ua)) return 'Opera';
+      if (/Firefox\//.test(ua)) return 'Firefox';
+      if (/CriOS\//.test(ua)) return 'Chrome (iOS)';
+      if (/FxiOS\//.test(ua)) return 'Firefox (iOS)';
+      if (/Chrome\//.test(ua) && !/Edg\//.test(ua)) return 'Chrome';
+      if (/Safari\//.test(ua) && !/Chrome\//.test(ua)) return 'Safari';
+      return '其他';
+    }
+
+    // 检测操作系统
+    function detectOS(ua) {
+      const platform = navigator.platform || '';
+      const isTouchMac = platform === 'MacIntel' && navigator.maxTouchPoints > 1;
+
+      if (/Android/i.test(ua)) return 'Android';
+      if (/iPhone|iPod/i.test(ua)) return 'iOS';
+      if (/iPad/i.test(ua) || isTouchMac) return 'iPadOS';
+      if (/Windows NT/i.test(ua)) return 'Windows';
+      if (/Mac OS X/i.test(ua)) return 'macOS';
+      if (/Linux/i.test(ua)) return 'Linux';
+      return '其他';
+    }
+
+
+
+    // 采集设备信息（提升系统识别准确率）
+    function collectDeviceInfo() {
+      const ua = navigator.userAgent;
+      const os = detectOS(ua);
+      const isMobile = /Mobile|Android|iPhone|iPod/i.test(ua) || os === 'iPadOS';
+
+      // 采集设备信息
+      visitorData.device = {
+        browser: detectBrowser(ua),
+        os: os,
+        deviceType: isMobile ? '手机/平板' : '桌面端',
+        screen: screen.width + ' × ' + screen.height,
+        language: navigator.language,
+        ua: ua,
+        referrer: document.referrer || '直接访问',
+        platform: navigator.platform || '未知'
+      };
+    }
+
+    // 生成指纹
+    async function generateFingerprint() {
+      // 生成指纹
+      const canvas = document.createElement('canvas');
+      // 获取 canvas 上下文 
+      const ctx = canvas.getContext('2d');
+      // 设置文本基线
+      ctx.textBaseline = 'top';
+      // 设置字体
+      ctx.font = '14px Arial';
+      // 填充文本
+      ctx.fillText(' fingerprint ', 2, 2);
+      // 将 canvas 转换为数据 URL
+      const canvasData = canvas.toDataURL();
+
+      // 拼接字符串
+      const str = [
+        navigator.userAgent,
+        navigator.language,
+        screen.width + 'x' + screen.height,
+        screen.colorDepth,
+        navigator.hardwareConcurrency || '',
+        canvasData
+      ].join('|');
+      // 将字符串转换为数据
+      const data = new TextEncoder().encode(str);
+      // 计算哈希值
+      const hash = await crypto.subtle.digest('SHA-256', data);
+      // 将哈希值转换为指纹
+      visitorData.fingerprint = Array.from(new Uint8Array(hash))
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('')
+        .substring(0, 16);
+    }
+
+    // 发送到 Netlify Function
+    async function sendToServer() {
+      const statusEl = document.getElementById('status'); // 获取状态元素
+      try {
+        // 发送前刷新可信度，确保前端展示与 DB 入库一致
+        updateGeoConfidence();
+        const res = await fetch('/.netlify/functions/log-visitor', {
+          method: 'POST', // 设置请求方法为 POST
+          headers: { 'Content-Type': 'application/json' }, // 设置请求头为 JSON 格式
+          body: JSON.stringify(visitorData) // 将 visitorData 转换为 JSON 格式
+        });
+        const result = await res.json(); // 获取结果  JSON 格式     
+        if (res.ok) { // 如果请求成功
+          statusEl.innerHTML = '<span class="success">✅ 数据已成功存储</span>'; // 设置状态为成功
+        } else { // 如果请求失败
+          statusEl.innerHTML = '<span class="fail">❌ ' + (result.error || '服务器错误') + '</span>'; // 设置状态为失败
+        }
+      } catch (e) { // 如果请求失败
+        statusEl.innerHTML = '<span class="warn">⚠️ 上报失败: ' + e.message + '</span>'; // 设置状态为警告
+      }
+      showDetails(); // 显示详细信息  
+    }
+
+    // 重新触发定位并上报
+    async function relocalize() {
+      if (isLocating) return;
+      setRelocateLoading(true);
+      setLoadingStatus('正在重新定位');
+      try {
+        visitorData.timestamp = new Date().toISOString();
+        visitorData = {};
+        visitorData.geo = {};
+        visitorData.geoAccuracy = '';
+        visitorData.geoSource = '';
+        await fetchPreciseLocation(false);
+        await sendToServer();
+        showDetails();
+        setStatusDone('数据采集完成');
+      } finally {
+        setRelocateLoading(false);
+      }
+    }
+
+    // 显示采集到的信息
+    function showDetails() {
+      const d = document.getElementById('details');
+      // updateGeoConfidence();
+
+      d.innerHTML = `
+      <div class="section">
+        <h3 class="section-title">📍 坐标（GCJ-02）</h3>
+        <div class="item-list">
+          <div class="item">
+            <span class="label">经纬度：</span>
+            <div class="coord-grid">
+              <div class="coord-box">
+                <span class="coord-title">经度</span>
+                <span class="coord-value">${visitor.lon || '--'}</span>
+              </div>
+              <div class="coord-box">
+                <span class="coord-title">纬度</span>
+                <span class="coord-value">${visitor.lat || '--'}</span>
+              </div>
+            </div>
+          </div>
+          <div class="item"><span class="label">定位来源：</span><span class="value">${visitor.source || '--'}</span></div>
+          <div class="item"><span class="label">状态：</span><span class="value">${visitor.geoResolveStatus || '--'}</span></div>
+          <div class="item"><span class="label">定位精度：</span><span class="value">${visitor.accuracy || '--'}</span></div>
+          <div class="item"><span class="label">可信度：</span><span class="badge ${visitor.confidenceLevel}">${visitor.confidence}</span></div>
+          <div class="item"><span class="label">地址：</span><span class="value">${visitor.address || '--'}</span></div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3 class="section-title">🧩 设备环境</h3>
+        <div class="item-list">
+          <div class="item"><span class="label">浏览器：</span><span class="value">${visitorData.device.browser || '--'}</span></div>
+          <div class="item"><span class="label">系统：</span><span class="value">${visitorData.device.os || '--'}</span></div>
+          <div class="item"><span class="label">设备：</span><span class="value">${visitorData.device.deviceType || '--'}</span></div>
+          <div class="item"><span class="label">屏幕：</span><span class="value">${visitorData.device.screen || '--'}</span></div>
+          <div class="item"><span class="label">语言：</span><span class="value">${visitorData.device.language || '--'}</span></div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3 class="section-title">🌐 访问数据</h3>
+        <div class="item-list">
+          <div class="item"><span class="label">来源：</span><span class="value">${visitorData.device.referrer || '--'}</span></div>
+          <div class="item"><span class="label">访客指纹：</span><span class="value">${visitorData.fingerprint || '--'}</span></div>
+          <div class="item"><span class="label">采集时间：</span><span class="value">${new Date(visitorData.timestamp).toLocaleString('zh-CN')}</span></div>
+        </div>
+      </div>
+    `;
+    }
+
+// 辅助函数：延迟指定毫秒
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+    // 启动
+    async function init() {
+      setLoadingStatus('正在初始化'); // 正在初始化...
+      setRelocateLoading(true); // 重新定位按钮禁用
+      collectDeviceInfo(); // 采集设备信息
+      await generateFingerprint(); // 生成指纹
+      await sleep(3000); // 暂停3秒
+      await locate(); // 获取高精度定位
+      await sendToServer(); // 发送数据到服务器
+      showDetails(); // 显示详细信息
+      setStatusDone('数据采集完成'); // 数据采集完成
+      setRelocateLoading(false); // 重新定位按钮启用
+    }
+
+    document.getElementById('relocateBtn').addEventListener('click', relocalize); // 重新定位按钮点击事件
+    init();
+    
+  </script>
+</body>
+
+</html>
