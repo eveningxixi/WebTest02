@@ -93,109 +93,14 @@ function wgs84ToGcj02(lng, lat) {
 }
 
 
-class PreciseLocator {
-  constructor(options = {}) {
-    this.minAccuracy = options.minAccuracy || 20;
-    this.maxWaitTime = options.maxWaitTime || 30000;
-    this.sampleCount = options.sampleCount || 3;
-  }
-
-  async getLocation() {
-    // 1. 快速返回缓存（如果新鲜）
-    const cached = this.getCached();
-    if (cached && Date.now() - cached.time < 5000) {
-      return cached;
-    }
-
-    // 2. 并行获取多源位置
-    const [geoResult, ipResult] = await Promise.allSettled([
-      this.getGeolocation(),
-      this.getIPLocation()
-    ]);
-
-    // 3. 选择最优结果
-    const candidates = [
-      geoResult.status === 'fulfilled' ? geoResult.value : null,
-      ipResult.status === 'fulfilled' ? ipResult.value : null
-    ].filter(Boolean);
-
-    const best = candidates.sort((a, b) => a.accuracy - b.accuracy)[0];
-    
-    if (best.accuracy > this.minAccuracy) {
-      console.warn(`定位精度不足: ${best.accuracy}m`);
-    }
-
-    this.cache(best);
-    return best;
-  }
-
-  getGeolocation() {
-    return new Promise((resolve, reject) => {
-      const samples = [];
-      const watchId = navigator.geolocation.watchPosition(
-        pos => {
-          samples.push(pos.coords);
-          if (samples.length >= this.sampleCount) {
-            navigator.geolocation.clearWatch(watchId);
-            resolve(this.fuseSamples(samples));
-          }
-        },
-        reject,
-        { enableHighAccuracy: true, maximumAge: 0 }
-      );
-      
-      setTimeout(() => {
-        navigator.geolocation.clearWatch(watchId);
-        if (samples.length > 0) {
-          resolve(this.fuseSamples(samples));
-        } else {
-          reject(new Error('定位超时'));
-        }
-      }, this.maxWaitTime);
-    });
-  }
-
-  fuseSamples(samples) {
-    // 加权平均融合
-    const best = samples.reduce((prev, curr) => 
-      curr.accuracy < prev.accuracy ? curr : prev
-    );
-    return {
-      latitude: best.latitude,
-      longitude: best.longitude,
-      accuracy: best.accuracy,
-      altitude: best.altitude,
-      heading: best.heading,
-      speed: best.speed
-    };
-  }
-}
-
-
 
 // =========================
 // 🚀 双阶段定位
 // =========================
-function locate() {
+async function locate() {
   if (!navigator.geolocation) return;
 
-  const locator = new PreciseLocator({
-  minAccuracy: 15,      // 最低可接受精度（米）
-  maxWaitTime: 20000,   // 最长等待时间（毫秒）
-  sampleCount: 3        // GPS 采样次数
-});
-
-locator.getLocation()
-  .then(pos => {
-    applyPosition(pos, true);
-    console.log('定位成功:', pos);
-    // { latitude: 39.9042, longitude: 116.4074, accuracy: 8, ... }
-  })
-  .catch(err => {
-    console.error('定位失败:', err.message);
-  });
-
-  // // 快速
+  // 快速
   // navigator.geolocation.getCurrentPosition(pos => {
   //   applyPosition(pos, false);
   // }, null, {
@@ -204,18 +109,18 @@ locator.getLocation()
   //   maximumAge: 60000
   // });
 
-  // // 精确
-  // navigator.geolocation.getCurrentPosition(pos => {
-  //   applyPosition(pos, true);
-  // }, null, {
-  //   enableHighAccuracy: true,
-  //   timeout: 10000,
-  //   maximumAge: 0
-  // });
+  // 精确
+  navigator.geolocation.getCurrentPosition(pos => {
+    applyPosition(pos, true);
+  }, null, {
+    enableHighAccuracy: true,
+    timeout: 10000,
+    maximumAge: 0
+  });
 }
 
 // 应用位置
-function applyPosition(pos, high) {
+async function applyPosition(pos, high) {
   const { latitude, longitude, accuracy } = pos.coords;
  // WGS-84 → GCJ-02 坐标转换
 const [gclLng, gclLat] = wgs84ToGcj02(longitude, latitude);
@@ -225,21 +130,21 @@ visitor.lat = gclLat;
   visitor.accuracy = Math.round(accuracy) + '米';
   visitor.source = high ? 'GPS精确定位' : '快速定位';
 
-  reverseGeocode(gclLng, gclLat);
+  await reverseGeocode(gclLng, gclLat);
 }
 
 // =========================
 // 🚀 高德优先反查 + 缓存
 // =========================
 async function reverseGeocode(lon, lat) {
-  const cacheKey = `geo_${lon.toFixed(5)}_${lat.toFixed(5)}`;
-  const cache = localStorage.getItem(cacheKey);
+  // const cacheKey = `geo_${lon.toFixed(5)}_${lat.toFixed(5)}`;
+  // const cache = localStorage.getItem(cacheKey);
 
-  if (cache) {
-    const data = JSON.parse(cache);
-    applyAddress(data);
-    return;
-  }
+  // if (cache) {
+  //   const data = JSON.parse(cache);
+  //   applyAddress(data);
+  //   return;
+  // }
 
   try {
     const url = `https://restapi.amap.com/v3/geocode/regeo?location=${lon},${lat}&key=${AMAP_KEY}&radius=3000&extensions=all`;
@@ -248,14 +153,14 @@ async function reverseGeocode(lon, lat) {
     const data = await res.json();
 
     if (data.status === '1') {
-      localStorage.setItem(cacheKey, JSON.stringify(data));
+      // localStorage.setItem(cacheKey, JSON.stringify(data));
       applyAddress(data);
       return;
     }
   } catch {}
 
   // fallback（极少用）
-  fallbackReverse(lon, lat);
+  await fallbackReverse(lon, lat);
 }
 
 // =========================
@@ -276,7 +181,7 @@ async function fallbackReverse(lon, lat) {
 // =========================
 // 🧠 地址解析（强化门牌）
 // =========================
-function applyAddress(data) {
+async function applyAddress(data) {
   const comp = data.regeocode.addressComponent;
 
   const street = comp.streetNumber?.street || '';
@@ -356,7 +261,7 @@ function render() {
 // =========================
 // 🚀 启动
 // =========================
-locate();
+await locate();
 
 </script>
 </body>
