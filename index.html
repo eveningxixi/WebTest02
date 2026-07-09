@@ -31,7 +31,7 @@ body {
 
 <body>
 <div class="box">
-  <h2>访客定位（GCJ-02坐标转换）</h2>
+  <h2>访客定位（GCJ-02坐标转换 0709）</h2>
   <div id="status">定位中...</div>
   <div id="info"></div>
   <div id="map"></div>
@@ -137,23 +137,23 @@ visitor.lat = gclLat;
 // 🚀 高德优先反查 + 缓存
 // =========================
 async function reverseGeocode(lon, lat) {
-  const cacheKey = `geo_${lon.toFixed(5)}_${lat.toFixed(5)}`;
-  const cache = localStorage.getItem(cacheKey);
+  // const cacheKey = `geo_${lon.toFixed(5)}_${lat.toFixed(5)}`;
+  // const cache = localStorage.getItem(cacheKey);
 
-  if (cache) {
-    const data = JSON.parse(cache);
-    applyAddress(data);
-    return;
-  }
+ // if (cache) {
+   // const data = JSON.parse(cache);
+   // applyAddress(data);
+   // return;
+  // }
 
   try {
-    const url = `https://restapi.amap.com/v3/geocode/regeo?location=${lon},${lat}&key=${AMAP_KEY}&radius=3000&extensions=all`;
+    const url = `https://restapi.amap.com/v3/geocode/regeo?location=${lon},${lat}&key=${AMAP_KEY}&radius=300&extensions=all`;
 
     const res = await fetch(url);
     const data = await res.json();
 
     if (data.status === '1') {
-      localStorage.setItem(cacheKey, JSON.stringify(data));
+      // localStorage.setItem(cacheKey, JSON.stringify(data));
       applyAddress(data);
       return;
     }
