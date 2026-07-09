@@ -147,7 +147,7 @@ async function reverseGeocode(lon, lat) {
   // }
 
   try {
-    const url = `https://restapi.amap.com/v3/geocode/regeo?location=${lon},${lat}&key=${AMAP_KEY}&radius=300&extensions=all`;
+    const url = `https://restapi.amap.com/v3/geocode/regeo?location=${lon},${lat}&key=${AMAP_KEY}&radius=300&extensions=all&batch=false&roadlevel=1&homeorcorp=1`;
 
     const res = await fetch(url);
     const data = await res.json();
