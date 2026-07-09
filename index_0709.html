@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>访客定位（GCJ-02坐标转换）</title>
+
+<script src="https://webapi.amap.com/maps?v=2.0&key=4a37526179c8b959ee1b93a79ddc2e00"></script>
+
+
+<style>
+body {
+  background: #0b1120;
+  color: #e2e8f0;
+  font-family: sans-serif;
+  padding: 20px;
+}
+.box {
+  max-width: 900px;
+  margin: auto;
+}
+#map {
+  height: 300px;
+  margin-top: 15px;
+  border-radius: 10px;
+}
+.item { margin: 6px 0; }
+.value { color: #22d3ee; }
+</style>
+</head>
+
+<body>
+<div class="box">
+  <h2>访客定位（GCJ-02坐标转换）</h2>
+  <div id="status">定位中...</div>
+  <div id="info"></div>
+  <div id="map"></div>
+</div>
+
+<script>
+const AMAP_KEY = '36a759d46f77237403291b98bed755f6';
+
+let visitor = {
+  lat: null, // 纬度
+  lon: null, // 经度
+  accuracy: '', // 精度
+  address: '', // 地址
+  source: '', // 来源
+  confidence: '' // 可信度
+};
+
+
+// =========================
+// 🌍 WGS-84 → GCJ-02 坐标转换
+// =========================
+const PI = 3.14159265358979324;
+const A = 6378245.0;
+const EE = 0.00669342162296594323;
+
+function outOfChina(lng, lat) {
+  return (lng < 72.004 || lng > 137.8347) || (lat < 0.8293 || lat > 55.8271);
+}
+
+function transformLat(lng, lat) {
+  let ret = -100.0 + 2.0 * lng + 3.0 * lat + 0.2 * lat * lat + 0.1 * lng * lat + 0.2 * Math.sqrt(Math.abs(lng));
+  ret += (20.0 * Math.sin(6.0 * lng * PI) + 20.0 * Math.sin(2.0 * lng * PI)) * 2.0 / 3.0;
+  ret += (20.0 * Math.sin(lat * PI) + 40.0 * Math.sin(lat / 3.0 * PI)) * 2.0 / 3.0;
+  ret += (160.0 * Math.sin(lat / 12.0 * PI) + 320 * Math.sin(lat * PI / 30.0)) * 2.0 / 3.0;
+  return ret;
+}
+
+function transformLng(lng, lat) {
+  let ret = 300.0 + lng + 2.0 * lat + 0.1 * lng * lng + 0.1 * lng * lat + 0.1 * Math.sqrt(Math.abs(lng));
+  ret += (20.0 * Math.sin(6.0 * lng * PI) + 20.0 * Math.sin(2.0 * lng * PI)) * 2.0 / 3.0;
+  ret += (20.0 * Math.sin(lng * PI) + 40.0 * Math.sin(lng / 3.0 * PI)) * 2.0 / 3.0;
+  ret += (150.0 * Math.sin(lng / 12.0 * PI) + 300.0 * Math.sin(lng / 30.0 * PI)) * 2.0 / 3.0;
+  return ret;
+}
+
+function wgs84ToGcj02(lng, lat) {
+  if (outOfChina(lng, lat)) return [lng, lat];
+  
+  let dLat = transformLat(lng - 105.0, lat - 35.0);
+  let dLng = transformLng(lng - 105.0, lat - 35.0);
+  const radLat = lat / 180.0 * PI;
+  let magic = Math.sin(radLat);
+  magic = 1 - EE * magic * magic;
+  const sqrtMagic = Math.sqrt(magic);
+  dLat = (dLat * 180.0) / ((A * (1 - EE)) / (magic * sqrtMagic) * PI);
+  dLng = (dLng * 180.0) / (A / sqrtMagic * Math.cos(radLat) * PI);
+  
+  return [lng + dLng, lat + dLat];
+}
+
+
+class PreciseLocator {
+  constructor(options = {}) {
+    this.minAccuracy = options.minAccuracy || 20;
+    this.maxWaitTime = options.maxWaitTime || 30000;
+    this.sampleCount = options.sampleCount || 3;
+  }
+
+  async getLocation() {
+    // 1. 快速返回缓存（如果新鲜）
+    const cached = this.getCached();
+    if (cached && Date.now() - cached.time < 5000) {
+      return cached;
+    }
+
+    // 2. 并行获取多源位置
+    const [geoResult, ipResult] = await Promise.allSettled([
+      this.getGeolocation(),
+      this.getIPLocation()
+    ]);
+
+    // 3. 选择最优结果
+    const candidates = [
+      geoResult.status === 'fulfilled' ? geoResult.value : null,
+      ipResult.status === 'fulfilled' ? ipResult.value : null
+    ].filter(Boolean);
+
+    const best = candidates.sort((a, b) => a.accuracy - b.accuracy)[0];
+    
+    if (best.accuracy > this.minAccuracy) {
+      console.warn(`定位精度不足: ${best.accuracy}m`);
+    }
+
+    this.cache(best);
+    return best;
+  }
+
+  getGeolocation() {
+    return new Promise((resolve, reject) => {
+      const samples = [];
+      const watchId = navigator.geolocation.watchPosition(
+        pos => {
+          samples.push(pos.coords);
+          if (samples.length >= this.sampleCount) {
+            navigator.geolocation.clearWatch(watchId);
+            resolve(this.fuseSamples(samples));
+          }
+        },
+        reject,
+        { enableHighAccuracy: true, maximumAge: 0 }
+      );
+      
+      setTimeout(() => {
+        navigator.geolocation.clearWatch(watchId);
+        if (samples.length > 0) {
+          resolve(this.fuseSamples(samples));
+        } else {
+          reject(new Error('定位超时'));
+        }
+      }, this.maxWaitTime);
+    });
+  }
+
+  fuseSamples(samples) {
+    // 加权平均融合
+    const best = samples.reduce((prev, curr) => 
+      curr.accuracy < prev.accuracy ? curr : prev
+    );
+    return {
+      latitude: best.latitude,
+      longitude: best.longitude,
+      accuracy: best.accuracy,
+      altitude: best.altitude,
+      heading: best.heading,
+      speed: best.speed
+    };
+  }
+}
+
+
+
+// =========================
+// 🚀 双阶段定位
+// =========================
+function locate() {
+  if (!navigator.geolocation) return;
+
+  const locator = new PreciseLocator({
+  minAccuracy: 15,      // 最低可接受精度（米）
+  maxWaitTime: 20000,   // 最长等待时间（毫秒）
+  sampleCount: 3        // GPS 采样次数
+});
+
+locator.getLocation()
+  .then(pos => {
+    applyPosition(pos, true);
+    console.log('定位成功:', pos);
+    // { latitude: 39.9042, longitude: 116.4074, accuracy: 8, ... }
+  })
+  .catch(err => {
+    console.error('定位失败:', err.message);
+  });
+
+  // // 快速
+  // navigator.geolocation.getCurrentPosition(pos => {
+  //   applyPosition(pos, false);
+  // }, null, {
+  //   enableHighAccuracy: false,
+  //   timeout: 2000,
+  //   maximumAge: 60000
+  // });
+
+  // // 精确
+  // navigator.geolocation.getCurrentPosition(pos => {
+  //   applyPosition(pos, true);
+  // }, null, {
+  //   enableHighAccuracy: true,
+  //   timeout: 10000,
+  //   maximumAge: 0
+  // });
+}
+
+// 应用位置
+function applyPosition(pos, high) {
+  const { latitude, longitude, accuracy } = pos.coords;
+ // WGS-84 → GCJ-02 坐标转换
+const [gclLng, gclLat] = wgs84ToGcj02(longitude, latitude);
+visitor.lon = gclLng;
+visitor.lat = gclLat;
+
+  visitor.accuracy = Math.round(accuracy) + '米';
+  visitor.source = high ? 'GPS精确定位' : '快速定位';
+
+  reverseGeocode(gclLng, gclLat);
+}
+
+// =========================
+// 🚀 高德优先反查 + 缓存
+// =========================
+async function reverseGeocode(lon, lat) {
+  const cacheKey = `geo_${lon.toFixed(5)}_${lat.toFixed(5)}`;
+  const cache = localStorage.getItem(cacheKey);
+
+  if (cache) {
+    const data = JSON.parse(cache);
+    applyAddress(data);
+    return;
+  }
+
+  try {
+    const url = `https://restapi.amap.com/v3/geocode/regeo?location=${lon},${lat}&key=${AMAP_KEY}&radius=3000&extensions=all`;
+
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (data.status === '1') {
+      localStorage.setItem(cacheKey, JSON.stringify(data));
+      applyAddress(data);
+      return;
+    }
+  } catch {}
+
+  // fallback（极少用）
+  fallbackReverse(lon, lat);
+}
+
+// =========================
+// 🌍 fallback
+// =========================
+async function fallbackReverse(lon, lat) {
+  try {
+    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`);
+    const data = await res.json();
+    visitor.address = data.display_name || '未知';
+    render();
+  } catch {
+    visitor.address = '解析失败';
+    render();
+  }
+}
+
+// =========================
+// 🧠 地址解析（强化门牌）
+// =========================
+function applyAddress(data) {
+  const comp = data.regeocode.addressComponent;
+
+  const street = comp.streetNumber?.street || '';
+  const number = comp.streetNumber?.number || '';
+
+  // 获取地址
+  let address = data.regeocode.formatted_address;
+
+  // 强化门牌
+  if (!number) {
+    const match = address.match(/(\d+号|\d+-\d+号)/);
+    if (match) address += ' ' + match[0];
+  }
+
+  visitor.address = address;
+
+  calcConfidence();
+  render();
+}
+
+// =========================
+// 🎯 精度评估
+// =========================
+function calcConfidence() {
+  const acc = parseInt(visitor.accuracy);
+
+  if (acc < 50) visitor.confidence = '高（门牌/街道级）';
+  else if (acc < 300) visitor.confidence = '中（城区级）';
+  else visitor.confidence = '低（粗略）';
+}
+
+
+// =========================
+// 🗺️ 地图渲染
+// =========================
+let map, marker;
+
+function renderMap() {
+  if (!visitor.lat) return;
+
+  if (!map) {
+    map = new AMap.Map('map', {
+      zoom: 15,
+      center: [visitor.lon, visitor.lat]
+    });
+  }
+
+  if (!marker) {
+    marker = new AMap.Marker({
+      position: [visitor.lon, visitor.lat],
+      map: map
+    });
+  } else {
+    marker.setPosition([visitor.lon, visitor.lat]);
+    map.setCenter([visitor.lon, visitor.lat]);
+  }
+}
+
+// =========================
+// 🖥️ UI
+// =========================
+function render() {
+  document.getElementById('status').innerText = '定位完成';
+
+  document.getElementById('info').innerHTML = `
+  <div class="item">GCJ-02经度：<span class="value">${visitor.lon}</span></div>
+  <div class="item">GCJ-02纬度：<span class="value">${visitor.lat}</span></div>    
+    <div class="item">精度：<span class="value">${visitor.accuracy}</span></div>
+    <div class="item">地址：<span class="value">${visitor.address}</span></div>
+    <div class="item">来源：<span class="value">${visitor.source}</span></div>
+    <div class="item">可信度：<span class="value">${visitor.confidence}</span></div>
+  `;
+
+  renderMap();
+}
+
+// =========================
+// 🚀 启动
+// =========================
+locate();
+
+</script>
+</body>
+</html>
